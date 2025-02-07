@@ -1,14 +1,18 @@
 from fairness_checker import check_discrimination, get_discriminatory_cases
 import os
+import sys
 
 # First ensure we have the XML file for the Adult dataset
+print("Generating XML file for the Adult dataset...")
 os.system('python Dataframe2XML.py Datasets/Adult.csv')
 
 # Set number of iterations
 iteration_no = 5
 
 # Run the discrimination check
-print("Checking for discrimination in the Adult dataset...")
+print("\nChecking for discrimination in the Adult dataset...")
+print("This may take some time as it runs multiple iterations with different models...")
+
 results = check_discrimination(
     dataset_path='Datasets/Adult.csv',
     iteration_no=iteration_no
@@ -27,6 +31,12 @@ for attr, stats in results.items():
 cases = get_discriminatory_cases()
 if not cases.empty:
     print("\n=== Sample of Discriminatory Cases ===")
+    print("Number of discriminatory cases found:", len(cases))
+    print("\nSample of cases (first 5):")
     print(cases.head())
+    
+    # Save discriminatory cases to a file
+    cases.to_csv('discriminatory_cases.csv', index=False)
+    print("\nFull results have been saved to 'discriminatory_cases.csv'")
 else:
     print("\nNo discriminatory cases found in the last iteration.")

@@ -36,17 +36,20 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
     else:
         model = Net()
         
-    # Define sensitive attributes to check
-    sensitive_attrs = {
-        'race': list(range(5)),    # 0-4 for different races
-        'sex': [0, 1],            # 0-1 for gender
-        'age': list(range(17, 91, 10))  # Age groups
-    }
+    # Define sensitive attributes and their test values
+    sensitive_tests = [
+        {'attr': 'race', 'index': 8, 'values': [0, 1, 2, 3, 4]},  # Race values
+        {'attr': 'sex', 'index': 9, 'values': [0, 1]},           # Sex values
+        {'attr': 'age', 'index': 0, 'values': [25, 35, 45, 55]}  # Age group boundaries
+    ]
     
     results = {}
     
-    for attr, values in sensitive_attrs.items():
+    for test in sensitive_tests:
         cex_counts = []
+        attr = test['attr']
+        idx = test['index']
+        test_values = test['values']
         
         for box in ['Decision tree', 'DNN']:
             for i in range(iteration_no):
@@ -65,21 +68,17 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
                     no_EPOCHS=1
                 )
                 
-                # Set assumptions based on attribute
-                if attr == 'race':
-                    for val in values:
-                        Assume(f'x[8] == {val}')  # 8 is race index
-                        Assert('model.predict(x) == model.predict(x_prime) where x_prime is x with different race')
+                for val in test_values:
+                    if attr in ['race', 'sex']:
+                        # For categorical attributes, check if the value equals the test value
+                        Assume('x[i] = t[i]', idx, [val])
+                    else:  # age
+                        # For age, check if the value is within a range
+                        Assume('x[i] >= t[i]', idx, [val])
+                        Assume('x[i] < t[i]', idx, [val + 10])
                 
-                elif attr == 'sex':
-                    for val in values:
-                        Assume(f'x[9] == {val}')  # 9 is sex index
-                        Assert('model.predict(x) == model.predict(x_prime) where x_prime is x with different sex')
-                
-                elif attr == 'age':
-                    for val in values:
-                        Assume(f'x[0] >= {val} and x[0] < {val + 10}')  # 0 is age index
-                        Assert('abs(model.predict(x) - model.predict(x_prime)) < 0.1 where x_prime is x with age +/- 5')
+                # Assert no discrimination
+                Assert('model.predict(x) == model.predict(x_prime)')
                 
                 # Check for discriminatory cases
                 dfCexSet = pd.read_csv('CexSet.csv')
