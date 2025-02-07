@@ -40,18 +40,18 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
     test_configs = [
         {
             'name': 'race',
-            'values': np.zeros(13),  # Initialize array for all features
-            'test_vals': range(5)    # Test values 0-4 for race
+            'index': 8,
+            'values': range(5)    # Test values 0-4 for race
         },
         {
             'name': 'sex',
-            'values': np.zeros(13),
-            'test_vals': range(2)    # Test values 0-1 for sex
+            'index': 9,
+            'values': range(2)    # Test values 0-1 for sex
         },
         {
             'name': 'age',
-            'values': np.zeros(13),
-            'test_vals': range(25, 65, 10)  # Test age ranges
+            'index': 0,
+            'values': range(25, 65, 10)  # Test age ranges
         }
     ]
     
@@ -60,6 +60,7 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
     for config in test_configs:
         cex_counts = []
         attr_name = config['name']
+        attr_idx = config['index']
         
         for box in ['Decision tree', 'DNN']:
             for i in range(iteration_no):
@@ -78,21 +79,13 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
                     no_EPOCHS=1
                 )
                 
-                for test_val in config['test_vals']:
-                    # Create a fresh array for each test
-                    test_values = config['values'].copy()
+                for val in config['values']:
+                    # Create test values array
+                    test_values = np.zeros(13)  # 13 features in Adult dataset
+                    test_values[attr_idx] = val
                     
-                    # Set the test value in the appropriate position
-                    if attr_name == 'race':
-                        test_values[8] = test_val  # race is at index 8
-                    elif attr_name == 'sex':
-                        test_values[9] = test_val  # sex is at index 9
-                    else:  # age
-                        test_values[0] = test_val  # age is at index 0
-                    
-                    # Make the assumption using the complete array
-                    for j in range(len(test_values)):
-                        Assume('x[i] = t[i]', j, [test_values[j]])
+                    # Make assumption for the entire array at once
+                    Assume('x[i] = t[i]', 0, test_values.tolist())
                 
                 # Assert fairness condition
                 if attr_name == 'age':
