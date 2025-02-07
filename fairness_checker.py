@@ -1,148 +1,104 @@
+from mlCheck import Assume, Assert, propCheck
 import pandas as pd
 import numpy as np
-from sklearn.metrics import confusion_matrix
-from typing import List, Dict, Union, Tuple
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-class FairnessChecker:
-    def __init__(self, sensitive_attributes: List[str]):
-        """
-        Initialize the FairnessChecker with sensitive attributes to check for discrimination.
-        
-        Args:
-            sensitive_attributes: List of column names that are considered sensitive (e.g., ['race', 'gender', 'age'])
-        """
-        self.sensitive_attributes = sensitive_attributes
-        
-    def check_discrimination(self, 
-                           data: pd.DataFrame,
-                           target_column: str,
-                           model_predictions: Union[np.ndarray, List] = None,
-                           threshold: float = 0.1) -> Dict:
-        """
-        Check for discrimination in the dataset by analyzing disparate impact and demographic parity.
-        
-        Args:
-            data: DataFrame containing the dataset
-            target_column: Name of the target/outcome column
-            model_predictions: Optional model predictions to check for discrimination in model outputs
-            threshold: Threshold for determining significant discrimination (default: 0.1)
-            
-        Returns:
-            Dictionary containing discrimination analysis results
-        """
-        results = {}
-        
-        for attribute in self.sensitive_attributes:
-            if attribute not in data.columns:
-                continue
-                
-            # Calculate base rates for each group in the sensitive attribute
-            groups = data[attribute].unique()
-            group_stats = {}
-            
-            for group in groups:
-                group_mask = data[attribute] == group
-                group_data = data[group_mask]
-                
-                # Calculate positive outcome rate
-                if model_predictions is not None:
-                    positive_rate = np.mean(model_predictions[group_mask])
-                else:
-                    positive_rate = group_data[target_column].mean()
-                
-                group_stats[group] = {
-                    'size': len(group_data),
-                    'positive_rate': positive_rate
-                }
-            
-            # Calculate disparate impact
-            max_rate = max(stats['positive_rate'] for stats in group_stats.values())
-            min_rate = min(stats['positive_rate'] for stats in group_stats.values())
-            
-            if max_rate > 0:
-                disparate_impact = min_rate / max_rate
-            else:
-                disparate_impact = 1.0
-            
-            # Determine if discrimination exists
-            has_discrimination = disparate_impact < (1 - threshold)
-            
-            results[attribute] = {
-                'has_discrimination': has_discrimination,
-                'disparate_impact': disparate_impact,
-                'group_stats': group_stats
-            }
-            
-        return results
-    
-    def get_discriminatory_cases(self,
-                               data: pd.DataFrame,
-                               target_column: str,
-                               model_predictions: Union[np.ndarray, List] = None) -> pd.DataFrame:
-        """
-        Return specific cases where discrimination might be present.
-        
-        Args:
-            data: DataFrame containing the dataset
-            target_column: Name of the target/outcome column
-            model_predictions: Optional model predictions to check
-            
-        Returns:
-            DataFrame containing potentially discriminatory cases
-        """
-        discriminatory_cases = pd.DataFrame()
-        
-        for attribute in self.sensitive_attributes:
-            if attribute not in data.columns:
-                continue
-                
-            groups = data[attribute].unique()
-            
-            # Calculate the overall positive rate
-            if model_predictions is not None:
-                overall_positive_rate = np.mean(model_predictions)
-            else:
-                overall_positive_rate = data[target_column].mean()
-            
-            for group in groups:
-                group_mask = data[attribute] == group
-                group_data = data[group_mask]
-                
-                if model_predictions is not None:
-                    group_predictions = model_predictions[group_mask]
-                    group_positive_rate = np.mean(group_predictions)
-                else:
-                    group_positive_rate = group_data[target_column].mean()
-                
-                # If this group has a significantly different outcome rate
-                if abs(group_positive_rate - overall_positive_rate) > 0.1:
-                    cases = group_data.copy()
-                    cases['discrimination_type'] = f'Different outcome rate for {attribute}={group}'
-                    cases['group_positive_rate'] = group_positive_rate
-                    cases['overall_positive_rate'] = overall_positive_rate
-                    discriminatory_cases = pd.concat([discriminatory_cases, cases])
-        
-        return discriminatory_cases
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(13, 64)  # 13 features in Adult dataset
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 2)   # Binary classification
 
-def check_dataset_fairness(data: pd.DataFrame,
-                         sensitive_attributes: List[str],
-                         target_column: str,
-                         model_predictions: Union[np.ndarray, List] = None) -> Tuple[Dict, pd.DataFrame]:
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
+
+def check_discrimination(dataset_path, model_path=None, iteration_no=5):
     """
-    Convenience function to check dataset fairness and get discriminatory cases.
+    Check for discrimination in the dataset using MLCheck framework.
     
     Args:
-        data: DataFrame containing the dataset
-        sensitive_attributes: List of column names that are considered sensitive
-        target_column: Name of the target/outcome column
-        model_predictions: Optional model predictions to check
-        
-    Returns:
-        Tuple containing:
-        - Dictionary with discrimination analysis results
-        - DataFrame with potentially discriminatory cases
+        dataset_path: Path to the dataset CSV file
+        model_path: Optional path to a pre-trained model
+        iteration_no: Number of times to run each test case
     """
-    checker = FairnessChecker(sensitive_attributes)
-    results = checker.check_discrimination(data, target_column, model_predictions)
-    cases = checker.get_discriminatory_cases(data, target_column, model_predictions)
-    return results, cases
+    # Load the dataset
+    data = pd.read_csv(dataset_path)
+    
+    # Initialize the model
+    if model_path:
+        model = torch.load(model_path)
+    else:
+        model = Net()
+        
+    # Define sensitive attributes to check
+    sensitive_attrs = {
+        'race': list(range(5)),    # 0-4 for different races
+        'sex': [0, 1],            # 0-1 for gender
+        'age': list(range(17, 91, 10))  # Age groups
+    }
+    
+    results = {}
+    
+    for attr, values in sensitive_attrs.items():
+        cex_counts = []
+        
+        for box in ['Decision tree', 'DNN']:
+            for i in range(iteration_no):
+                # Initialize property checker
+                checker = propCheck(
+                    no_of_params=1,
+                    max_samples=1500,
+                    model_type='Pytorch',
+                    model=model,
+                    mul_cex=True,
+                    xml_file='dataInput.xml',
+                    no_of_class=2,
+                    white_box_model=box,
+                    no_of_layers=2,
+                    layer_size=32,
+                    no_EPOCHS=1
+                )
+                
+                # Set assumptions based on attribute
+                if attr == 'race':
+                    for val in values:
+                        Assume(f'x[8] == {val}')  # 8 is race index
+                        Assert('model.predict(x) == model.predict(x_prime) where x_prime is x with different race')
+                
+                elif attr == 'sex':
+                    for val in values:
+                        Assume(f'x[9] == {val}')  # 9 is sex index
+                        Assert('model.predict(x) == model.predict(x_prime) where x_prime is x with different sex')
+                
+                elif attr == 'age':
+                    for val in values:
+                        Assume(f'x[0] >= {val} and x[0] < {val + 10}')  # 0 is age index
+                        Assert('abs(model.predict(x) - model.predict(x_prime)) < 0.1 where x_prime is x with age +/- 5')
+                
+                # Check for discriminatory cases
+                dfCexSet = pd.read_csv('CexSet.csv')
+                cex_counts.append(dfCexSet.shape[0])
+        
+        results[attr] = {
+            'total_cases': sum(cex_counts),
+            'avg_cases_per_iteration': np.mean(cex_counts),
+            'max_cases': max(cex_counts),
+            'min_cases': min(cex_counts)
+        }
+    
+    return results
+
+def get_discriminatory_cases():
+    """
+    Return the discriminatory cases found in the last run.
+    """
+    try:
+        return pd.read_csv('CexSet.csv')
+    except:
+        return pd.DataFrame()
