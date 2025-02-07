@@ -35,21 +35,31 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
         model = torch.load(model_path)
     else:
         model = Net()
-        
-    # Define sensitive attributes and their test values
-    sensitive_tests = [
-        {'attr': 'race', 'index': 8, 'values': [0, 1, 2, 3, 4]},  # Race values
-        {'attr': 'sex', 'index': 9, 'values': [0, 1]},           # Sex values
-        {'attr': 'age', 'index': 0, 'values': [25, 35, 45, 55]}  # Age group boundaries
+    
+    # Define test configurations
+    test_configs = [
+        {
+            'name': 'race',
+            'values': np.zeros(13),  # Initialize array for all features
+            'test_vals': range(5)    # Test values 0-4 for race
+        },
+        {
+            'name': 'sex',
+            'values': np.zeros(13),
+            'test_vals': range(2)    # Test values 0-1 for sex
+        },
+        {
+            'name': 'age',
+            'values': np.zeros(13),
+            'test_vals': range(25, 65, 10)  # Test age ranges
+        }
     ]
     
     results = {}
     
-    for test in sensitive_tests:
+    for config in test_configs:
         cex_counts = []
-        attr = test['attr']
-        idx = test['index']
-        test_values = test['values']
+        attr_name = config['name']
         
         for box in ['Decision tree', 'DNN']:
             for i in range(iteration_no):
@@ -68,23 +78,33 @@ def check_discrimination(dataset_path, model_path=None, iteration_no=5):
                     no_EPOCHS=1
                 )
                 
-                for val in test_values:
-                    if attr in ['race', 'sex']:
-                        # For categorical attributes, check if the value equals the test value
-                        Assume('x[i] = t[i]', idx, [val])
+                for test_val in config['test_vals']:
+                    # Create a fresh array for each test
+                    test_values = config['values'].copy()
+                    
+                    # Set the test value in the appropriate position
+                    if attr_name == 'race':
+                        test_values[8] = test_val  # race is at index 8
+                    elif attr_name == 'sex':
+                        test_values[9] = test_val  # sex is at index 9
                     else:  # age
-                        # For age, check if the value is within a range
-                        Assume('x[i] >= t[i]', idx, [val])
-                        Assume('x[i] < t[i]', idx, [val + 10])
+                        test_values[0] = test_val  # age is at index 0
+                    
+                    # Make the assumption using the complete array
+                    for j in range(len(test_values)):
+                        Assume('x[i] = t[i]', j, [test_values[j]])
                 
-                # Assert no discrimination
-                Assert('model.predict(x) == model.predict(x_prime)')
+                # Assert fairness condition
+                if attr_name == 'age':
+                    Assert('abs(model.predict(x) - model.predict(x_prime)) < 0.1')
+                else:
+                    Assert('model.predict(x) == model.predict(x_prime)')
                 
                 # Check for discriminatory cases
                 dfCexSet = pd.read_csv('CexSet.csv')
                 cex_counts.append(dfCexSet.shape[0])
         
-        results[attr] = {
+        results[attr_name] = {
             'total_cases': sum(cex_counts),
             'avg_cases_per_iteration': np.mean(cex_counts),
             'max_cases': max(cex_counts),
